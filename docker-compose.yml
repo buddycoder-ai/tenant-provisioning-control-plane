@@ -1,0 +1,49 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: tenant_control_plane
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+    ports:
+      - 5432:5432
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d tenant_control_plane"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    volumes: [postgres-data:/var/lib/postgresql/data]
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    ports: ["15672:15672"]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build: .
+    command: sh -c 'alembic upgrade head && python -m app.main'
+    environment:
+      DATABASE_URL: postgresql+psycopg://app:app@postgres:5432/tenant_control_plane
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/%2F
+      DOCKER: "true"
+      LOG_LEVEL: INFO
+    ports: ["8000:8000"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+
+  worker:
+    build: .
+    command: python -m app.worker --fail-rate=0 --min-delay-ms=100 --max-delay-ms=300
+    environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/%2F
+      DOCKER: "true"
+      LOG_LEVEL: INFO
+    depends_on:
+      rabbitmq: { condition: service_healthy }
+volumes:
+  postgres-data:
